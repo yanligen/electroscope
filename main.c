@@ -13,6 +13,12 @@
 
 #define PLL_CLOCK       50000000
 
+#define Board_PC	P36
+#define BIST_PC		P24
+#define BIST_BT		P12
+#define ALERT_LED	P04
+#define ALERT_BEEP	P07
+
 void SYSInit(void)
 {
     /*---------------------------------------------------------------------------------------------------------*/
@@ -92,7 +98,7 @@ void SYSInit(void)
     /* Disable the P1.4 - P1.5 digital input path to avoid the leakage current */
     GPIO_DISABLE_DIGITAL_PATH(P1, 0x30);
 
-    /* Configure the P1.0 - P1.3 ADC analog input pins */
+    /* Configure the P1.4 - P1.5 ADC analog input pins */
     SYS->P1_MFP &= ~(SYS_MFP_P14_Msk | SYS_MFP_P15_Msk);
     SYS->P1_MFP |= SYS_MFP_P14_AIN4 | SYS_MFP_P15_AIN5;
 
@@ -125,16 +131,6 @@ void UART1Init(void)
     UART_Open(UART1, 115200);
 }
 
-//	/* Configure P1.2 as Output mode and P4.1 as Input mode */
-//    GPIO_SetMode(P1, BIT2, GPIO_PMD_OUTPUT);
-//    GPIO_SetMode(P4, BIT1, GPIO_PMD_INPUT);
-
-#define Board_PC	P36
-#define BIST_PC		P24
-
-#define ALERT_LED	P04
-#define ALERT_BEEP	P07
-
 void GPIOInit(void)
 {
 	/*3.3V PowerControl Configure P3.6 as Output mode*/
@@ -144,6 +140,9 @@ void GPIOInit(void)
 	/*BIST PowerControl Configure P2.4 as Output mode*/
 	GPIO_SetMode(P2, BIT4, GPIO_PMD_OUTPUT);
 	BIST_PC = 1; // Low Level Open, Default Close
+
+	/*BIST Button Configure P1.2 as Input mode, HighLevel is valid*/
+	GPIO_SetMode(P1, BIT2, GPIO_PMD_INPUT);
 
 	/*SPI CS Configure P3.1 as Output mode*/
 	GPIO_SetMode(P3, BIT1, GPIO_PMD_OUTPUT);
@@ -155,11 +154,11 @@ void GPIOInit(void)
 	
 	/*ALERT LED Configure P0.4 as Output mode*/
 	GPIO_SetMode(P0, BIT4, GPIO_PMD_OUTPUT);
-	ALERT_LED = 1; // High Level Open, Default Close
+	ALERT_LED = 0; // High Level Open, Default Close
 
 	/*ALERT BEEP Configure P0.7 as Output mode*/
 	GPIO_SetMode(P0, BIT7, GPIO_PMD_OUTPUT);
-	ALERT_BEEP = 1; // High Level Open, Default Close
+	ALERT_BEEP = 0; // High Level Open, Default Close
 
 }
 
@@ -223,14 +222,17 @@ int main(void)
 
     printf("System clock rate: %d Hz\r\n", SystemCoreClock);
 
-		/*Init Board GPIO*/
-		GPIOInit();
+	/*Init Board GPIO*/
+	GPIOInit();
 
 	/* Init Timer*/
 	TIMERInit();
 
     /* Init PWM channel 3 */
-    PWMInit();
+	if (BIST_BT) {
+		BIST_PC = 0;
+		PWMInit();
+	}
 
     /* Init ADC to get the value of variable resistor */
     // ADCInit();
@@ -243,6 +245,7 @@ int main(void)
     {
     	CLK_SysTickLongDelay(1000000);
 			ALERT_LED = ~ALERT_LED;
+			ALERT_BEEP = ~ALERT_BEEP;
 			printf("test led\r\n");
     }
 }
