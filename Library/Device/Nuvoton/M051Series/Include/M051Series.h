@@ -5976,7 +5976,9 @@ typedef volatile unsigned short vu16;
 #include "uart.h"
 #include "hdiv.h"
 #include "acmp.h"
+// Add By YanLigen
 #include "mcp41100.h"
+#include "sample.h"
 #endif
 
 /* Copyright (C) 2014 Nuvoton Technology Corp. All rights reserved. */

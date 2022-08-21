@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define></Define>
               <Undefine></Undefine>
-              <IncludePath>.\Library\CMSIS\Include;.\Library\Device\Nuvoton\M051Series\Include;.\Library\StdDriver\inc</IncludePath>
+              <IncludePath>.\Library\CMSIS\Include;.\Library\Device\Nuvoton\M051Series\Include;.\Library\StdDriver\inc;.\</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -487,6 +487,16 @@
               <FileName>wwdt.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Library\StdDriver\src\wwdt.c</FilePath>
+            </File>
+            <File>
+              <FileName>mcp41100.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\StdDriver\src\mcp41100.c</FilePath>
+            </File>
+            <File>
+              <FileName>sample.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Library\StdDriver\src\sample.c</FilePath>
             </File>
           </Files>
         </Group>

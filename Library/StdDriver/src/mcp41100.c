@@ -13,6 +13,9 @@
 
 #include "M051Series.h"
 
+float g_ampGearF[6] = {0.5, 1, 2, 3, 4, 5};
+float g_ampGear = 1;
+
 void SpiSendByte(uint8_t data)
 {
     uint8_t i = 0;
@@ -74,3 +77,48 @@ void SendMcpWriteData(uint8_t data)
     SPI_CS = 1;
 	CLK_SysTickDelay(1);
 }
+
+void SetGear(float gear)
+{
+	/* Amp = 0.5, 1, 2, 3, 4, 5*/
+	uint8_t ampGear[6] = {6, 13, 32, 57, 93, 151};
+	uint8_t i;
+
+	for (i = 0; i < 6; i++) {
+		if (gear == g_ampGearF[i]) {
+			break;
+		}
+	}
+	if (i > 5) {
+		i = 5;
+	}
+	SendMcpWriteData(ampGear[i]);
+}
+
+void AdjustGear(float radio)
+{
+	uint8_t i;
+	float temp;
+	if (radio < g_ampGearF[0]) {
+		temp = g_ampGearF[0];
+	}
+
+	for (i = 0; i < 5; i++) {
+		if (radio >= g_ampGearF[i] && radio < g_ampGearF[i+1]) {
+			temp = g_ampGearF[i];
+			break;
+		}
+	}
+
+	if (i == 5) {
+		temp = g_ampGearF[5];
+	}
+	if (temp == g_ampGear) {
+		;
+	} else {
+		SetGear(temp);
+		g_ampGear = temp;
+	}
+	
+}
+

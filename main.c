@@ -9,16 +9,18 @@
  * Copyright (C) 2022 YanLigen. All rights reserved.
 *****************************************************************************/
 #include <stdio.h>
+#include <stdbool.h>
+#include <math.h>
+#include "board.h"
+#include "fft_lut.h"
 #include "M051Series.h"
 
 #define PLL_CLOCK       50000000
 
-#define Board_PC	P36
-#define BIST_PC		P24
-#define BIST_BT		P12
-#define ALERT_LED	P04
-#define ALERT_BEEP	P07
-
+uint8_t g_boardPwrOn = 0;
+uint8_t g_alertOn = 0;
+uint32_t g_alertCounter = 50;
+uint8_t g_noSignalCount = 0;
 void SYSInit(void)
 {
     /*---------------------------------------------------------------------------------------------------------*/
@@ -135,7 +137,7 @@ void GPIOInit(void)
 {
 	/*3.3V PowerControl Configure P3.6 as Output mode*/
 	GPIO_SetMode(P3, BIT6, GPIO_PMD_OUTPUT);
-	Board_PC = 0; // Default Low Level
+	BOARD_PC = 0; // Default Low Level
 
 	/*BIST PowerControl Configure P2.4 as Output mode*/
 	GPIO_SetMode(P2, BIT4, GPIO_PMD_OUTPUT);
@@ -164,12 +166,31 @@ void GPIOInit(void)
 
 void TIMERInit(void)
 {
-	/* Open Timer0 frequency to 50 Hz in periodic mode, and enable interrupt */
-    TIMER_Open(TIMER0, TIMER_PERIODIC_MODE, 50);
-    TIMER_EnableInt(TIMER0);
+    uint32_t u32Freq;
 
-	/* Enable Timer0 ~ Timer3 NVIC */
+	/* Open Timer0 time to 10ms  in periodic mode, and enable interrupt */
+    TIMER_Open(TIMER0, TIMER_PERIODIC_MODE, 100);
+    TIMER_EnableInt(TIMER0);
+	TIMER_Start(TIMER0); // Timer555 Power On
+
+	/* Open Timer1 time to 1/SAMPLE_RATE s in periodic mode, and enable interrupt */
+    u32Freq = TIMER_Open(TIMER1, TIMER_PERIODIC_MODE, SAMPLE_RATE);
+	printf("Time1 Frequency = %d\n\r", u32Freq);
+
+    if (u32Freq != SAMPLE_RATE) {
+        printf("# Warning. Sample rate does not equal to the pre-defined setting.\n\r");
+    }
+    TIMER_EnableInt(TIMER1);
+
+
+	/* Open Timer2 time to 1s in periodic mode, and enable interrupt */
+//    TIMER_Open(TIMER2, TIMER_PERIODIC_MODE, 2);
+    TIMER_EnableInt(TIMER2);
+
+	/* Enable Timer0 ~ Timer1 NVIC */
     NVIC_EnableIRQ(TMR0_IRQn);
+	NVIC_EnableIRQ(TMR1_IRQn);
+//	NVIC_EnableIRQ(TMR2_IRQn);
 }
 
 void ADCInit(void)
@@ -178,36 +199,185 @@ void ADCInit(void)
     ADC_POWER_ON(ADC);
 
     /* Set the ADC operation mode as single, input mode as single-end and enable the analog input channel 4 and 5 */
-    ADC_Open(ADC, ADC_ADCR_DIFFEN_SINGLE_END, ADC_ADCR_ADMD_SINGLE_CYCLE, 0x3 << 4);
+    ADC_Open(ADC, ADC_ADCR_DIFFEN_SINGLE_END, ADC_ADCR_ADMD_SINGLE, 0x3 << 4);
 
     /* clear the A/D interrupt flag for safe */
     ADC_CLR_INT_FLAG(ADC, ADC_ADF_INT);
 }
 
-void ADCTest(void)
+void CloseSignalAlert(void)
 {
-	  uint32_t channel;
-    int32_t  conversionData;
-	
-    /* clear the A/D interrupt flag for safe */
-    ADC_CLR_INT_FLAG(ADC, ADC_ADF_INT);
-	
-    /* start A/D conversion */
-    ADC_START_CONV(ADC);
-
-    /* Wait conversion done */
-    while(!ADC_GET_INT_FLAG(ADC, ADC_ADF_INT));
-	
-	  for(channel = 4; channel < 6; channel++)
-    {
-        conversionData = ADC_GET_CONVERSION_DATA(ADC, channel);
-        printf("Conversion result of channel %d: 0x%X (%d)\n", channel, conversionData, conversionData);
-    }
+	g_alertOn = 0;
+	ALERT_LED = 0;
+	ALERT_BEEP = 0;
 }
+
 
 /* Main function  */
+bool BatterySample(void)
+{
+	int32_t batteryConvData;
+	batteryConvData = ADCConversionFromChannel(BATTERY_CH);
+	// printf("Battery Conversion: 0x%x (%d)\r\n", batteryConvData, batteryConvData);
+
+	if (batteryConvData < 2122) { // LP2980 VIN-VO = 120mV
+		// Add Alert
+		CloseSignalAlert();
+		g_boardPwrOn = 0;
+		BOARD_PC= 0;
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+bool IsBoardPowerOn(void)
+{
+	if (g_boardPwrOn) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+void CheckNoSignalState(uint8_t signalLevel)
+{
+	if (signalLevel == 0 && IsBoardPowerOn()) {
+		g_noSignalCount++;
+		if (g_noSignalCount > 4) {
+			g_noSignalCount = 0;
+			printf("No Signal PowerOff\r\n");
+//			g_boardPwrOn = 0; // Timer555 Power Off
+//			BOARD_PC = 0;
+		}
+	}
+}
+
+uint8_t CheckSignalQuality4Intensity(int32_t intensity)
+{
+	uint8_t signalLevel = 0;
+	float voltage = (float)intensity * 3300 / 1024.0;
+	float temp = voltage / g_ampGear; // unit mV
+	if (temp > 300)
+		signalLevel = 3;
+		else if (temp > 150)
+			signalLevel = 2;
+			else if (temp > 5)
+				signalLevel = 1;
+				else
+					signalLevel = 0;
+	return signalLevel;
+}
+
+uint8_t CheckSignalQuality3Intensity(int32_t intensity)
+{
+	uint8_t signalLevel = 0;
+	float voltage = (float)intensity * 3300 / 1024.0;
+	float temp = voltage / g_ampGear; // unit mV
+	if (temp > 350)
+		signalLevel = 3;
+		else if (temp > 200)
+			signalLevel = 2;
+			else if (temp > 50)
+				signalLevel = 1;
+				else
+					signalLevel = 0;
+	return signalLevel;
+}
+
+uint8_t CheckSignalQuality2Intensity(int32_t intensity)
+{
+	uint8_t signalLevel = 0;
+	float voltage = (float)intensity * 3300 / 1024.0;
+	float temp = voltage / g_ampGear;
+	if (temp > 400)
+		signalLevel = 3;
+		else if (temp > 250)
+			signalLevel = 2;
+			else if (temp > 100)
+				signalLevel = 1;
+				else
+					signalLevel = 0;
+	return signalLevel;
+}
+
+uint8_t CheckSignalQuality1Intensity(int32_t intensity)
+{
+	uint8_t signalLevel = 0;
+	float voltage = (float)intensity * 3300 / 1024.0;
+	float temp = voltage / g_ampGear;
+	if (temp > 500)
+		signalLevel = 3;
+		else if (temp > 350)
+			signalLevel = 2;
+			else if (temp > 200)
+				signalLevel = 1;
+				else
+					signalLevel = 0;
+	return signalLevel;
+}
+
+bool DCCheck(int32_t max, int32_t min)
+{
+	if (max - min < 5) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+void AutoAdjustGear(int32_t max, int32_t min)
+{
+	float average = (float)(max + min) / 2.0;
+	float attitude = ((float)max - average) * 3.3 / 1024.0;
+	float temp, radio;
+	
+	printf("max,min= %d,%d average = %f, voltage = %f \r\n", max, min, average, attitude);
+	if (attitude == 0) {
+		radio = 5.0; // max radio
+	} else {
+		temp = 1.2 / attitude; // Standard Voltage Is 1.2 V
+		radio = temp * g_ampGear;
+	}
+	AdjustGear(radio);
+	printf("temp = %f, radio = %f, gear = %f \r\n", temp, radio, g_ampGear);
+}
+
+uint8_t CheckSignal(void)
+{
+	uint8_t signalLevel = 0;
+	// According Amp Gare To Calculate Signal Attidute
+	if (g_signalInfo.radio > 35) // 50Hz Signal Quality Is Perfect
+		signalLevel = CheckSignalQuality4Intensity(g_signalInfo.signalIntensity);
+	else if (g_signalInfo.radio > 20) // 50Hz Signal Quality Is Excellent
+		signalLevel = CheckSignalQuality3Intensity(g_signalInfo.signalIntensity);
+		else if (g_signalInfo.radio > 15) // 50Hz Signal Quality Is Good
+			signalLevel = CheckSignalQuality2Intensity(g_signalInfo.signalIntensity);
+			else if (g_signalInfo.radio > 10) // 50Hz Signal Quality Is Pass
+				signalLevel = CheckSignalQuality1Intensity(g_signalInfo.signalIntensity);
+				else
+					signalLevel = 0;
+	AutoAdjustGear(g_signalInfo.attitudeMax, g_signalInfo.attitudeMin);
+	return signalLevel;
+}
+
+const uint8_t altetLevel[3] = {50, 25, 12};
+
+void OpenSignalAlert(uint8_t signalLevel)
+{
+	static uint8_t level = 1;
+	if (signalLevel != level) {
+		g_alertCounter = altetLevel[signalLevel - 1];
+		level = signalLevel;
+	}
+	g_alertOn = 1;
+}
+
+
 int main(void)
 {
+	uint8_t mainState = 0;
+	uint8_t signalLevel = 0;
+
     /* Unlock protected registers */
     SYS_UnlockReg();
 
@@ -225,28 +395,58 @@ int main(void)
 	/*Init Board GPIO*/
 	GPIOInit();
 
+	/*SetMCP41100Gear*/
+	SetGear(g_ampGear);
+
 	/* Init Timer*/
 	TIMERInit();
 
-    /* Init PWM channel 3 */
+    /* Init PWM channel 3 For Bist*/
 	if (BIST_BT) {
 		BIST_PC = 0;
 		PWMInit();
 	}
 
-    /* Init ADC to get the value of variable resistor */
-    // ADCInit();
+	/*BoardPower On*/
+	g_boardPwrOn = 1;
 	
-	//  ADCTest();
+    /* Init ADC to get the value of variable resistor */
+    ADCInit();
 
-	TIMER_Start(TIMER0);
-
-    while(1)
-    {
-    	CLK_SysTickLongDelay(1000000);
-			ALERT_LED = ~ALERT_LED;
-			ALERT_BEEP = ~ALERT_BEEP;
-			printf("test led\r\n");
+    while (1) {
+    	switch (mainState) {
+		case 0:
+			StartSignalSample(TIMER1);
+			while (!g_sampleOver) {
+				BatterySample();
+			}
+			g_sampleOver = 0;
+			mainState = 1;
+			break;
+		case 1:
+			FFT();
+			signalLevel = CheckSignal();
+			if (signalLevel > 0) {
+				g_noSignalCount = 0;
+				mainState = 2;
+			} else {
+				printf("have no signal \r\n");
+				CloseSignalAlert();
+				CheckNoSignalState(signalLevel);
+				mainState = 0;
+			}
+			BatterySample();
+			break;
+		case 2:
+			printf("Enable 555 signalLevel = %d \r\n", signalLevel);
+			// g_boardPwrOn = 1;
+			OpenSignalAlert(signalLevel);
+			mainState = 0;
+			break;
+		default:
+			mainState = 0;
+			break;
+		}
     }
 }
 
